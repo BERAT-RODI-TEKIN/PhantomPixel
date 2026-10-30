@@ -9,6 +9,7 @@ import numpy as np
 
 from .engine import load_array
 from .errors import StegoError
+from .i18n import t
 
 
 @dataclass
@@ -23,14 +24,19 @@ class Comparison:
 class Detection:
     chi2: float
     suspicion: float  # 0..1
-    verdict: str
+    level: str        # "high" | "medium" | "low" | "unknown" (stable, language independent)
+
+    @property
+    def verdict(self) -> str:
+        """Human readable verdict in the current language."""
+        return t(f"detect.{self.level}")
 
 
 def compare(original: str | Path, stego: str | Path) -> Comparison:
     a = load_array(original)[..., :3].astype(np.int16)
     b = load_array(stego)[..., :3].astype(np.int16)
     if a.shape != b.shape:
-        raise StegoError("The two images have different sizes and cannot be compared.")
+        raise StegoError(t("err.diff_sizes"))
     diff = a - b
     mse = float(np.mean(diff.astype(np.float64) ** 2))
     psnr = float("inf") if mse == 0 else 10 * math.log10(255 ** 2 / mse)
@@ -58,17 +64,12 @@ def detect(path: str | Path) -> Detection:
     mask = expected > 5
     k = int(mask.sum()) - 1
     if k < 8:
-        return Detection(0.0, 0.0, "Not enough data to analyse")
+        return Detection(0.0, 0.0, "unknown")
 
     chi2 = float((((even[mask] - expected[mask]) ** 2) / expected[mask]).sum())
     # Right-tail chi-square probability via the Wilson-Hilferty approximation (no scipy needed)
     z = ((chi2 / k) ** (1 / 3) - (1 - 2 / (9 * k))) / math.sqrt(2 / (9 * k))
     suspicion = 0.5 * math.erfc(z / math.sqrt(2))
 
-    if suspicion > 0.9:
-        verdict = "High suspicion: value pairs are unusually balanced"
-    elif suspicion > 0.5:
-        verdict = "Medium suspicion"
-    else:
-        verdict = "Low suspicion: no obvious LSB trace"
-    return Detection(chi2, suspicion, verdict)
+    level = "high" if suspicion > 0.9 else "medium" if suspicion > 0.5 else "low"
+    return Detection(chi2, suspicion, level)

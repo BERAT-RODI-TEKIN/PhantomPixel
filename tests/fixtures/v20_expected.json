@@ -1,0 +1,19 @@
+{
+  "v20_text.png": {
+    "password": null,
+    "kind": "text",
+    "text": "Merhaba dünya ĞÜŞİÖÇ ✓ (made by v2.0)"
+  },
+  "v20_encrypted.png": {
+    "password": "pass-v20",
+    "kind": "text",
+    "text": "top secret v2.0"
+  },
+  "v20_file.png": {
+    "password": null,
+    "kind": "file",
+    "name": "note.bin",
+    "sha256": "785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9",
+    "size": 1024
+  }
+}

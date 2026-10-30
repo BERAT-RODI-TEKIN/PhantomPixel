@@ -13,19 +13,10 @@ from PIL import Image
 
 from . import analyzer, workflows
 from .config import WORKSPACE
+from .i18n import t
 
 DEMO_DIR = WORKSPACE / "demo"
 DEMO_PASSWORD = "phantom"
-DEMO_MESSAGE = (
-    "SECRET DOCUMENT\n"
-    "---------------\n"
-    "This text was hidden inside the pixels of an image.\n"
-    "Only the lowest bit of each red, green and blue value was changed:\n"
-    "a colour moves by at most 1/255, which the human eye cannot notice.\n\n"
-    "Without the password the text cannot be read (AES-256-GCM), and the hidden\n"
-    "bits are scattered across the whole image, so there is no pattern to find.\n\n"
-    "- PhantomPixel"
-)
 
 
 @dataclass
@@ -57,18 +48,19 @@ def make_cover(path: Path, w: int = 1280, h: int = 800, seed: int = 7) -> Path:
     return path
 
 
-def run(message: str = DEMO_MESSAGE, password: str | None = DEMO_PASSWORD,
+def run(message: str | None = None, password: str | None = DEMO_PASSWORD,
         on_step: Callable[[str], None] = lambda s: None) -> DemoResult:
-    on_step("Generating a cover image")
+    message = message if message is not None else t("demo.message")
+    on_step(t("demo.step_cover"))
     cover = make_cover(DEMO_DIR / "demo_cover.png")
 
-    on_step("Hiding the message inside the pixels")
+    on_step(t("demo.step_hide"))
     res = workflows.hide(cover, text=message, password=password, output=DEMO_DIR / "demo_hidden.png")
 
-    on_step("Extracting it again to verify")
+    on_step(t("demo.step_extract"))
     recovered = workflows.extract(res.output, password).text or ""
 
-    on_step("Building the comparison card")
+    on_step(t("demo.step_card"))
     card = workflows.make_card(cover, res.output, DEMO_DIR / "demo_card.png")
 
     return DemoResult(DEMO_DIR, cover, res.output, card, message, recovered,

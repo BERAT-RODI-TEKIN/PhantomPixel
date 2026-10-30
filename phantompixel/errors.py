@@ -13,6 +13,10 @@ class NoDataError(StegoError):
     """The image does not contain PhantomPixel data."""
 
 
+class NewerVersionError(StegoError):
+    """The image was made by a newer PhantomPixel version than this one."""
+
+
 class PasswordRequiredError(StegoError):
     """The data is password-protected but no password was given."""
 

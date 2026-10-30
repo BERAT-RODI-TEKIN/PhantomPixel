@@ -8,23 +8,40 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 from .analyzer import Comparison
 from .config import APP_NAME, BG_RGB, PANEL_RGB, RED_RGB
+from . import i18n
 from .engine import load_array
+from .i18n import t
 from .utils import human_size
 
 _BOLD_FONTS = ("DejaVuSans-Bold.ttf", "arialbd.ttf", "Arial Bold.ttf", "segoeuib.ttf")
 _MONO_FONTS = ("DejaVuSansMono-Bold.ttf", "consolab.ttf", "Menlo.ttc", "cour.ttf")
 
 
-def _font(size: int, mono: bool = False) -> ImageFont.ImageFont:
+def _truetype(size: int, mono: bool = False):
     for name in (_MONO_FONTS if mono else _BOLD_FONTS):
         try:
             return ImageFont.truetype(name, size)
         except OSError:
             continue
+    return None
+
+
+def _font(size: int, mono: bool = False) -> ImageFont.ImageFont:
+    font = _truetype(size, mono)
+    if font is not None:
+        return font
     try:
         return ImageFont.load_default(size)
-    except TypeError:  # eski Pillow
+    except TypeError:  # old Pillow
         return ImageFont.load_default()
+
+
+def _card_text(key: str) -> str:
+    """Card text in the current language. Without a real TrueType font (no Turkish / Cyrillic
+    glyphs) the English text is used instead of showing empty boxes."""
+    if i18n.get_language() != "en" and _truetype(20) is None:
+        return i18n.t_en(key)
+    return t(key)
 
 
 def diff_map(original: str | Path, stego: str | Path, max_side: int = 640) -> Image.Image:
@@ -62,12 +79,12 @@ def comparison_card(original: str | Path, stego: str | Path, output: str | Path,
 
     # Title
     d.text((W // 2, 85), APP_NAME.upper(), font=_font(92), fill=RED_RGB, anchor="mm")
-    d.text((W // 2, 160), "Which one hides a secret?", font=_font(38), fill=(210, 210, 215), anchor="mm")
+    d.text((W // 2, 160), _card_text("card.question"), font=_font(38), fill=(210, 210, 215), anchor="mm")
 
     panels = [
-        ("ORIGINAL", Image.open(original).convert("RGB")),
-        ("HIDDEN DATA INSIDE", Image.open(stego).convert("RGB")),
-        ("DIFFERENCE MAP", diff_map(original, stego)),
+        (_card_text("card.original"), Image.open(original).convert("RGB")),
+        (_card_text("card.hidden"), Image.open(stego).convert("RGB")),
+        (_card_text("card.diff"), diff_map(original, stego)),
     ]
     x0 = (W - (3 * BOX + 2 * GAP)) // 2
     for i, (label, img) in enumerate(panels):
@@ -79,10 +96,10 @@ def comparison_card(original: str | Path, stego: str | Path, output: str | Path,
     # Stats strip
     psnr = "∞" if stats.psnr == float("inf") else f"{stats.psnr:.1f} dB"
     items = [
-        ("PSNR", psnr),
-        ("CHANGED PIXELS", f"{stats.changed_pixels_pct:.3f}%"),
-        ("HIDDEN DATA", human_size(hidden_bytes)),
-        ("PROTECTION", "AES-256-GCM" if encrypted else "None"),
+        (_card_text("card.k_psnr"), psnr),
+        (_card_text("card.k_changed"), f"{stats.changed_pixels_pct:.3f}%"),
+        (_card_text("card.k_hidden"), human_size(hidden_bytes)),
+        (_card_text("card.k_protection"), "AES-256-GCM" if encrypted else _card_text("card.none")),
     ]
     slot = (W - 2 * PAD) // len(items)
     for i, (k, v) in enumerate(items):
@@ -90,7 +107,7 @@ def comparison_card(original: str | Path, stego: str | Path, output: str | Path,
         d.text((cx, 905), v, font=_font(44, mono=True), fill=RED_RGB, anchor="mm")
         d.text((cx, 955), k, font=_font(22), fill=(150, 150, 158), anchor="mm")
 
-    d.text((W // 2, 1030), "LSB steganography  •  The lowest bit of every colour channel carries data",
+    d.text((W // 2, 1030), _card_text("card.footer"),
            font=_font(24), fill=(110, 110, 118), anchor="mm")
 
     out = Path(output)

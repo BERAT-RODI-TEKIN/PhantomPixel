@@ -1,8 +1,11 @@
 """Run with:  python -m unittest discover -s tests -v"""
 import io
+import os
 import sys
 import tempfile
 import unittest
+import zlib
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -10,11 +13,15 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from phantompixel import analyzer, engine, workflows  # noqa: E402
+from phantompixel import analyzer, engine, i18n, workflows  # noqa: E402
 from phantompixel.errors import (  # noqa: E402
     CapacityError, CorruptedDataError, NoDataError, PasswordRequiredError, StegoError, WrongPasswordError,
 )
 from phantompixel.utils import unique_path  # noqa: E402
+
+
+def setUpModule():
+    i18n.set_language("en")
 
 
 class StegoTests(unittest.TestCase):
@@ -70,8 +77,10 @@ class StegoTests(unittest.TestCase):
 
     # --- reliability -------------------------------------------------------
     def test_too_large(self):
+        # random bytes cannot be compressed, so they really are too big for this image
+        big = engine.Payload("file", "random.bin", os.urandom(100_000))
         with self.assertRaises(CapacityError):
-            workflows.hide(self.cover, text="x" * 100_000)
+            engine.hide(self.cover, big, self.tmp / "big.png")
 
     def test_clean_image_has_no_data(self):
         self.assertIsNone(engine.inspect(self.cover))
@@ -118,10 +127,43 @@ class StegoTests(unittest.TestCase):
         self.assertGreater(cmp.psnr, 50)
 
     def test_capacity_matches_reality(self):
+        # Incompressible data: capacity() is exact, one byte more must not fit.
         cap = engine.capacity(self.cover)
-        workflows.hide(self.cover, text="x" * (cap - 0))  # exactly full must work
+        engine.hide(self.cover, engine.Payload("text", "", os.urandom(cap)), self.tmp / "full.png")
         with self.assertRaises(CapacityError):
-            workflows.hide(self.cover, text="x" * (cap + 1))
+            engine.hide(self.cover, engine.Payload("text", "", os.urandom(cap + 1)), self.tmp / "over.png")
+
+    def test_capacity_matches_reality_with_password(self):
+        cap = engine.capacity(self.cover, encrypted=True)
+        engine.hide(self.cover, engine.Payload("text", "", os.urandom(cap)), self.tmp / "full.png", "pw")
+        with self.assertRaises(CapacityError):
+            engine.hide(self.cover, engine.Payload("text", "", os.urandom(cap + 1)), self.tmp / "over.png", "pw")
+
+    # --- compression (v2.1) --------------------------------------------------
+    def test_compressible_data_fits_more_than_capacity(self):
+        cap = engine.capacity(self.cover)
+        text = "hello " * (cap // 2)                       # larger than capacity, but very repetitive
+        res = workflows.hide(self.cover, text=text)
+        self.assertTrue(res.compressed)
+        self.assertLess(res.stored_bytes, res.original_bytes)
+        self.assertEqual(workflows.extract(res.output).text, text)
+
+    def test_incompressible_data_is_stored_as_is(self):
+        res = workflows.hide(self.cover, text="x")         # too short to benefit from compression
+        self.assertFalse(res.compressed)
+        self.assertEqual(engine.inspect(res.output)["compressed"], False)
+
+    def test_stored_size_matches_what_is_written(self):
+        payload = engine.Payload("text", "", ("lorem ipsum " * 300).encode())
+        res = engine.hide(self.cover, payload, self.tmp / "s.png", "pw")
+        self.assertEqual(engine.stored_size(payload, encrypted=True), res.stored_bytes)
+
+    def test_decompression_bomb_is_refused(self):
+        with mock.patch.object(engine, "MAX_PAYLOAD_BYTES", 10_000):   # small limit keeps the test fast
+            bomb = zlib.compress(b"\0" * 5_000_000, 9)                  # a few KB that expand to 5 MB
+            with self.assertRaises(CorruptedDataError):
+                engine._inflate(bomb)
+            self.assertEqual(engine._inflate(zlib.compress(b"ok" * 100)), b"ok" * 100)
 
 
 class PermutationTests(unittest.TestCase):

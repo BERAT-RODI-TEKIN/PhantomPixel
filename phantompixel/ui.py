@@ -15,9 +15,10 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 
-from . import demo, engine, picker, workflows
-from .config import APP_NAME, DARK_RED, GREY, RED, TAGLINE, VERSION
+from . import demo, engine, i18n, picker, splash, workflows
+from .config import APP_NAME, DARK_RED, GREY, RED, VERSION
 from .errors import StegoError, WrongPasswordError
+from .i18n import t
 from .utils import bar, human_size, is_lossy
 
 console = Console()
@@ -46,13 +47,17 @@ def _render(word: str) -> list[str]:
     return ["".join(_GLYPHS[c][r] for c in word) for r in range(6)]
 
 
-def banner() -> None:
+def banner(animate: bool = False, no_anim: bool = False) -> None:
+    """Prints the banner. With animate=True it plays the start-up animation when the terminal allows it."""
     words = ["PHANTOMPIXEL"] if console.width >= 100 else ["PHANTOM", "PIXEL"]
+    lines = [line for w in words for line in _render(w)]
     console.print()
-    for w in words:
-        for row, line in enumerate(_render(w)):
-            console.print(Align.center(f"[{_GRADIENT[row]}]{line}[/]"))
-    console.print(Align.center(f"[{GREY}]{TAGLINE}  •  v{VERSION}[/]"))
+    if animate and splash.should_animate(console, no_anim) and splash.play(
+            console, lines, _GRADIENT, t("app.tagline"), VERSION, GREY):
+        return
+    for i, line in enumerate(lines):
+        console.print(Align.center(f"[{_GRADIENT[i % 6]}]{line}[/]"))
+    console.print(Align.center(f"[{GREY}]{t('app.tagline')}  •  v{VERSION}[/]"), highlight=False)
     console.print()
 
 
@@ -72,7 +77,7 @@ class GoTo(Exception):
 
 
 def run_wizard(steps: list[Callable[[dict], None]], ctx: dict) -> None:
-    console.print(f"[{GREY}]Tip: type [bold]<[/bold] at any prompt to go back one step.[/]")
+    console.print(f"[{GREY}]{t('ui.tip_back')}[/]")
     i = 0
     while i < len(steps):
         try:
@@ -90,7 +95,7 @@ def run_wizard(steps: list[Callable[[dict], None]], ctx: dict) -> None:
 # Prompt helpers
 # --------------------------------------------------------------------------
 def _error(msg: str) -> None:
-    console.print(Panel(escape(msg), title="[bold]Error[/]", border_style="red", box=box.ROUNDED))
+    console.print(Panel(escape(msg), title=f"[bold]{t('ui.error_title')}[/]", border_style="red", box=box.ROUNDED))
 
 
 def _kv(rows: list[tuple[str, str]]) -> Table:
@@ -117,11 +122,11 @@ def ask_file(label: str, kind: str = "image", current: Path | None = None, optio
     """Asks for a file: drag & drop it, paste a path, or press Enter / type ? to browse."""
     while True:
         if current:
-            hint = f"(Enter = keep {current.name}, ? = browse, or drop a file here)"
+            hint = t("ui.file_hint_keep", name=current.name)
         elif optional:
-            hint = "(Enter = skip, ? = browse, or drop a file here)"
+            hint = t("ui.file_hint_skip")
         else:
-            hint = "(drop a file here, paste a path, or press Enter to browse)"
+            hint = t("ui.file_hint")
         raw = ask(label, hint=hint).strip('"').strip("'")
 
         if raw == "":
@@ -134,17 +139,17 @@ def ask_file(label: str, kind: str = "image", current: Path | None = None, optio
             try:
                 picked = picker.pick(kind, label)
             except picker.PickerUnavailable:
-                console.print(f"[{GREY}]No file dialog available here: drop a file onto this window or paste its path.[/]")
+                console.print(f"[{GREY}]{t('ui.no_dialog')}[/]")
                 continue
             if picked is None:
-                console.print(f"[{GREY}]No file selected.[/]")
+                console.print(f"[{GREY}]{t('ui.no_file')}[/]")
                 continue
             return picked
 
         path = Path(raw).expanduser()
         if path.is_file():
             return path
-        console.print(f"[{GREY}]File not found: {escape(raw)}[/]")
+        console.print(f"[{GREY}]{t('ui.file_not_found', path=escape(raw))}[/]")
 
 
 def ask_image(label: str, current: Path | None = None, optional: bool = False) -> Path | None:
@@ -172,7 +177,7 @@ def _take(c: dict, key: str):
 def _actions(options: dict[str, tuple[str, Callable[[], None]]]) -> None:
     """Shows one-key follow-up actions; Enter returns to the menu."""
     keys = "   ".join(f"[bold {RED}]{k}[/] {label}" for k, (label, _) in options.items())
-    console.print(f"\n{keys + '   ' if keys else ''}[bold {RED}]Enter[/] back to menu")
+    console.print(f"\n{keys + '   ' if keys else ''}[bold {RED}]Enter[/] {t('ui.enter_back')}")
     while True:
         raw = Prompt.ask(f"[bold {RED}]›[/]", default="", show_default=False).strip().lower()
         if raw in ("", "<"):
@@ -180,90 +185,96 @@ def _actions(options: dict[str, tuple[str, Callable[[], None]]]) -> None:
         if raw in options:
             options[raw][1]()
         else:
-            console.print(f"[{GREY}]Press one of the keys above, or Enter.[/]")
+            console.print(f"[{GREY}]{t('ui.press_key')}[/]")
 
 
 # --------------------------------------------------------------------------
 # HIDE wizard
 # --------------------------------------------------------------------------
 def _hide_cover(c: dict) -> None:
-    c["cover"] = _take(c, "cover") or ask_image("Cover image", c.get("cover"))
+    c["cover"] = _take(c, "cover") or ask_image(t("hide.cover"), c.get("cover"))
     w, h = engine.image_size(c["cover"])
-    console.print(f"[green]✓[/] {escape(c['cover'].name)}  [{GREY}]{w}×{h} px · fits up to "
-                  f"{human_size(engine.capacity_for(w, h))} ({human_size(engine.capacity_for(w, h, True))} with a password)[/]")
+    console.print(f"[green]✓[/] {escape(c['cover'].name)}  [{GREY}]"
+                  f"{t('hide.cover_ok', w=w, h=h, cap=human_size(engine.capacity_for(w, h)), cap_pw=human_size(engine.capacity_for(w, h, True)))}[/]")
 
 
 def _hide_secret(c: dict) -> None:
-    cap = engine.capacity(c["cover"])
+    w, h = engine.image_size(c["cover"])
+    cap = engine.body_capacity_for(w, h)
     while True:
-        raw = ask("Secret", hint="(type a message, or press Enter to choose a file)")
+        raw = ask(t("hide.secret"), hint=t("hide.secret_hint"))
         if raw:
+            payload = workflows.make_payload(text=raw)
             c["text"], c["file"] = raw, None
-            c["size"] = len(raw.encode("utf-8"))
-            c["what"] = f"message, {c['size']} bytes"
+            c["what"] = t("hide.what_message", n=len(payload.data))
         else:
             try:
-                picked = picker.pick("any", "Choose the file to hide")
+                picked = picker.pick("any", t("hide.pick_title"))
             except picker.PickerUnavailable:
-                picked = ask_file("File to hide", "any")
+                picked = ask_file(t("hide.file_label"), "any")
             if picked is None:
-                console.print(f"[{GREY}]No file selected.[/]")
+                console.print(f"[{GREY}]{t('ui.no_file')}[/]")
                 continue
+            payload = workflows.make_payload(file=picked)
             c["text"], c["file"] = None, picked
-            c["size"] = picked.stat().st_size + len(picked.name.encode("utf-8"))  # the name is stored too
-            c["what"] = f"file {picked.name} ({human_size(picked.stat().st_size)})"
+            c["what"] = t("hide.what_file", name=picked.name, size=human_size(picked.stat().st_size))
 
-        if c["size"] > cap:
-            _error(f"Too big: {human_size(c['size'])}, but this image holds about {human_size(cap)}. "
-                   "Type < to pick a larger image, or choose a smaller secret.")
+        stored = engine.stored_size(payload)   # after compression: text and documents shrink
+        if stored > cap:
+            _error(t("hide.too_big", size=human_size(stored), cap=human_size(cap)))
             continue
-        console.print(f"[green]✓[/] {escape(c['what'])}  [{GREY}]({c['size'] / cap * 100:.1f}% of this image)[/]")
+        c["payload"], c["stored"] = payload, stored
+        console.print(f"[green]✓[/] {escape(c['what'])}  [{GREY}]{t('hide.usage_ok', pct=f'{stored / cap * 100:.1f}')}[/]")
         return
 
 
 def _hide_password(c: dict) -> None:
     while True:
-        pw = ask("Password", secret=True, hint="(optional, Enter = no password; there is no recovery if you forget it)")
+        pw = ask(t("common.password"), secret=True, hint=t("hide.pw_hint"))
         if not pw:
             c["password"] = None
             return
-        if ask("Repeat password", secret=True) == pw:
+        if ask(t("hide.pw_repeat"), secret=True) == pw:
             c["password"] = pw
             return
-        console.print(f"[{GREY}]The passwords do not match, try again.[/]")
+        console.print(f"[{GREY}]{t('hide.pw_mismatch')}[/]")
 
 
 def _hide_review(c: dict) -> None:
     encrypted = bool(c["password"])
-    cap = engine.capacity(c["cover"], encrypted)
-    if c["size"] > cap:
-        _error(f"With a password the limit is {human_size(cap)} for this image. Choose a smaller secret.")
+    w, h = engine.image_size(c["cover"])
+    cap = engine.body_capacity_for(w, h)
+    stored = engine.stored_size(c["payload"], encrypted)
+    if stored > cap:
+        _error(t("hide.pw_too_big", size=human_size(stored), cap=human_size(cap)))
         raise GoTo(1)
     console.print(Panel(_kv([
-        ("Cover", escape(c["cover"].name)),
-        ("Secret", escape(c["what"])),
-        ("Protection", "AES-256-GCM + password-keyed scattering" if encrypted else "none (anyone with this tool can read it)"),
-        ("Image usage", f"{bar(c['size'] / cap)} {c['size'] / cap * 100:.1f}%"),
-    ]), title=f"[bold {RED}]Ready[/]", border_style=DARK_RED, box=box.ROUNDED))
-    ask("Hide it now?", hint="(Enter = yes, < = go back)")
+        (t("hide.row_cover"), escape(c["cover"].name)),
+        (t("hide.row_secret"), escape(c["what"])),
+        (t("hide.row_protection"), t("hide.prot_on") if encrypted else t("hide.prot_off")),
+        (t("hide.row_usage"), f"{bar(stored / cap)} {stored / cap * 100:.1f}%"),
+    ]), title=f"[bold {RED}]{t('hide.ready')}[/]", border_style=DARK_RED, box=box.ROUNDED))
+    ask(t("hide.confirm"), hint=t("hide.confirm_hint"))
 
 
 def _hide_run(c: dict) -> None:
-    with console.status(f"[{RED}]Hiding and verifying...[/]", spinner="dots"):
+    with console.status(f"[{RED}]{t('hide.running')}[/]", spinner="dots"):
         res = workflows.hide(c["cover"], text=c.get("text"), file=c.get("file"), password=c["password"])
+    hidden = (t("hide.hidden_compressed", size=human_size(res.stored_bytes), orig=human_size(res.original_bytes))
+              if res.compressed else human_size(res.stored_bytes))
     console.print(Panel(_kv([
-        ("Saved as", f"[bold]{escape(str(res.output))}[/]"),
-        ("Hidden", human_size(res.stored_bytes)),
-        ("Verified", "[green]✓ read back from the file and compared[/]" if res.verified else "skipped"),
-        ("Note", "Share this file as a PNG file. JPEG / social media recompression destroys the data."),
-    ]), title="[bold green]Done[/]", border_style="green", box=box.ROUNDED))
+        (t("hide.row_saved"), f"[bold]{escape(str(res.output))}[/]"),
+        (t("hide.row_hidden"), hidden),
+        (t("hide.row_verified"), f"[green]{t('hide.verified_yes')}[/]" if res.verified else t("common.skipped")),
+        (t("hide.row_note"), t("hide.note_png")),
+    ]), title=f"[bold green]{t('hide.done')}[/]", border_style="green", box=box.ROUNDED))
 
     def card() -> None:
         path = workflows.make_card(c["cover"], res.output)
-        console.print(f"[green]✓[/] Card: [bold]{escape(str(path))}[/]")
+        console.print(f"[green]✓[/] {t('common.card_done', path=f'[bold]{escape(str(path))}[/]')}")
         workflows.open_file(path)
 
-    _actions({"c": ("make share card", card), "o": ("open folder", lambda: workflows.reveal(res.output))})
+    _actions({"c": (t("hide.act_card"), card), "o": (t("common.folder"), lambda: workflows.reveal(res.output))})
 
 
 HIDE = [_hide_cover, _hide_secret, _hide_password, _hide_review, _hide_run]
@@ -272,22 +283,25 @@ HIDE = [_hide_cover, _hide_secret, _hide_password, _hide_review, _hide_run]
 # --------------------------------------------------------------------------
 # EXTRACT wizard
 # --------------------------------------------------------------------------
+def _kind(info: dict) -> str:
+    return t("common.with_password") if info["encrypted"] else t("common.no_password")
+
+
 def _x_image(c: dict) -> None:
     preset = _take(c, "stego")
     while True:
-        path = preset or ask_image("Image with hidden data", c.get("stego"))
+        path = preset or ask_image(t("x.image"), c.get("stego"))
         preset = None
-        info = engine.inspect(path)
+        info = engine.inspect(path)   # raises NewerVersionError for images made by a newer version
         if info:
             break
-        msg = "No PhantomPixel data found in this image."
+        msg = t("x.no_data")
         if is_lossy(path):
-            msg += " This is a JPEG: its compression destroys hidden data. You need the original PNG file."
+            msg += t("x.jpeg")
         _error(msg)
         c.pop("stego", None)
     c["stego"], c["info"] = path, info
-    kind = "password-protected" if info["encrypted"] else "no password"
-    console.print(f"[green]✓[/] Hidden data found: {human_size(info['stored_bytes'])}, {kind}")
+    console.print(f"[green]✓[/] {t('x.found', size=human_size(info['stored_bytes']), kind=_kind(info))}")
 
 
 def _x_password(c: dict) -> None:
@@ -295,7 +309,7 @@ def _x_password(c: dict) -> None:
         c["password"] = None
         return
     while True:
-        pw = ask("Password", secret=True)
+        pw = ask(t("common.password"), secret=True)
         if pw:
             c["password"] = pw
             return
@@ -303,25 +317,25 @@ def _x_password(c: dict) -> None:
 
 def _x_run(c: dict) -> None:
     try:
-        with console.status(f"[{RED}]Extracting...[/]", spinner="dots"):
+        with console.status(f"[{RED}]{t('x.running')}[/]", spinner="dots"):
             res = workflows.extract(c["stego"], c.get("password"))
     except WrongPasswordError as exc:
         _error(str(exc))
         raise GoTo(1)  # ask for the password again
 
     if res.text is not None:
-        console.print(Panel(escape(res.text), title=f"[bold {RED}]Hidden message[/]", border_style=RED, box=box.DOUBLE))
+        console.print(Panel(escape(res.text), title=f"[bold {RED}]{t('x.msg_title')}[/]", border_style=RED, box=box.DOUBLE))
 
         def save() -> None:
             path = workflows.save_text(res.text, c["stego"])
-            console.print(f"[green]✓[/] Saved: [bold]{escape(str(path))}[/]")
+            console.print(f"[green]✓[/] {t('common.saved', path=f'[bold]{escape(str(path))}[/]')}")
             workflows.reveal(path)
 
-        _actions({"s": ("save as .txt", save)})
+        _actions({"s": (t("x.act_save"), save)})
     else:
-        console.print(Panel(f"Saved as [bold]{escape(str(res.saved))}[/]", title="[bold green]File extracted[/]",
-                            border_style="green", box=box.ROUNDED))
-        _actions({"o": ("open folder", lambda: workflows.reveal(res.saved))})
+        console.print(Panel(t("x.file_saved", path=f"[bold]{escape(str(res.saved))}[/]"),
+                            title=f"[bold green]{t('x.file_title')}[/]", border_style="green", box=box.ROUNDED))
+        _actions({"o": (t("common.folder"), lambda: workflows.reveal(res.saved))})
 
 
 EXTRACT = [_x_image, _x_password, _x_run]
@@ -331,45 +345,44 @@ EXTRACT = [_x_image, _x_password, _x_run]
 # INSPECT wizard
 # --------------------------------------------------------------------------
 def _i_image(c: dict) -> None:
-    c["stego"] = _take(c, "stego") or ask_image("Image to inspect", c.get("stego"))
+    c["stego"] = _take(c, "stego") or ask_image(t("i.image"), c.get("stego"))
 
 
 def _i_original(c: dict) -> None:
     if _has_preset(c, "original"):
         c["original"] = _take(c, "original")
         return
-    c["original"] = ask_image("Original image (optional, adds a comparison)", c.get("original"), optional=True)
+    c["original"] = ask_image(t("i.original"), c.get("original"), optional=True)
 
 
 def _i_run(c: dict) -> None:
-    with console.status(f"[{RED}]Analysing...[/]", spinner="dots"):
+    with console.status(f"[{RED}]{t('i.running')}[/]", spinner="dots"):
         r = workflows.inspect(c["stego"], c.get("original"))
 
     if r.signature:
-        kind = "password-protected" if r.signature["encrypted"] else "no password"
-        sig = f"[bold green]✔ FOUND[/]  {human_size(r.signature['stored_bytes'])}, {kind}"
+        sig = t("i.found", size=human_size(r.signature["stored_bytes"]), kind=_kind(r.signature),
+                version=r.signature["version"])
     else:
-        sig = "[bold yellow]✘ none found[/]"
+        sig = t("i.none")
     rows = [
-        ("PhantomPixel signature", sig),
-        ("Statistical test", f"{bar(r.detection.suspicion)} {r.detection.suspicion * 100:.0f}%  {r.detection.verdict}"),
+        (t("i.row_sig"), sig),
+        (t("i.row_stat"), f"{bar(r.detection.suspicion)} {r.detection.suspicion * 100:.0f}%  {r.detection.verdict}"),
     ]
     if r.comparison:
         psnr = "∞" if r.comparison.psnr == float("inf") else f"{r.comparison.psnr:.1f} dB"
-        rows += [("PSNR vs original", psnr), ("Changed pixels", f"{r.comparison.changed_pixels_pct:.4f}%")]
-    console.print(Panel(_kv(rows), title=f"[bold {RED}]Inspection[/]", border_style=RED, box=box.ROUNDED))
-    console.print(f"[{GREY}]The signature check is exact but only recognises images made by PhantomPixel. "
-                  f"The statistical test is a heuristic: a low score does not prove an image is clean.[/]")
+        rows += [(t("i.row_psnr"), psnr), (t("i.row_changed"), f"{r.comparison.changed_pixels_pct:.4f}%")]
+    console.print(Panel(_kv(rows), title=f"[bold {RED}]{t('i.title')}[/]", border_style=RED, box=box.ROUNDED))
+    console.print(f"[{GREY}]{t('i.note')}[/]")
 
     def lsb() -> None:
         path = workflows.save_lsb_plane(c["stego"])
-        console.print(f"[green]✓[/] LSB plane: [bold]{escape(str(path))}[/]")
+        console.print(f"[green]✓[/] {t('i.lsb_done', path=f'[bold]{escape(str(path))}[/]')}")
         workflows.open_file(path)
 
     options: dict[str, tuple[str, Callable[[], None]]] = {}
     if r.signature:
-        options["e"] = ("extract it now", lambda: run_wizard(EXTRACT, {"preset": {"stego": c["stego"]}}))
-    options["l"] = ("save LSB plane", lsb)
+        options["e"] = (t("i.act_extract"), lambda: run_wizard(EXTRACT, {"preset": {"stego": c["stego"]}}))
+    options["l"] = (t("i.act_lsb"), lsb)
     _actions(options)
 
 
@@ -380,19 +393,19 @@ INSPECT = [_i_image, _i_original, _i_run]
 # CARD wizard
 # --------------------------------------------------------------------------
 def _c_original(c: dict) -> None:
-    c["original"] = ask_image("Original image (without hidden data)", c.get("original"))
+    c["original"] = ask_image(t("c.original"), c.get("original"))
 
 
 def _c_stego(c: dict) -> None:
-    c["stego"] = ask_image("Image with hidden data", c.get("stego"))
+    c["stego"] = ask_image(t("x.image"), c.get("stego"))
 
 
 def _c_run(c: dict) -> None:
-    with console.status(f"[{RED}]Building card...[/]", spinner="dots"):
+    with console.status(f"[{RED}]{t('c.running')}[/]", spinner="dots"):
         card = workflows.make_card(c["original"], c["stego"])
-    console.print(f"[green]✓[/] Card: [bold]{escape(str(card))}[/]")
+    console.print(f"[green]✓[/] {t('common.card_done', path=f'[bold]{escape(str(card))}[/]')}")
     workflows.open_file(card)
-    _actions({"o": ("open folder", lambda: workflows.reveal(card))})
+    _actions({"o": (t("common.folder"), lambda: workflows.reveal(card))})
 
 
 CARD = [_c_original, _c_stego, _c_run]
@@ -402,17 +415,17 @@ CARD = [_c_original, _c_stego, _c_run]
 # CAPACITY wizard
 # --------------------------------------------------------------------------
 def _cap_image(c: dict) -> None:
-    c["image"] = ask_image("Image", c.get("image"))
+    c["image"] = ask_image(t("cap.image"), c.get("image"))
 
 
 def _cap_show(c: dict) -> None:
-    w, h = engine.image_size(c["image"])
+    info = workflows.capacity_info(c["image"])
     console.print(Panel(_kv([
-        ("Size", f"{w} × {h} pixels"),
-        ("Capacity", human_size(engine.capacity_for(w, h))),
-        ("With password", human_size(engine.capacity_for(w, h, True))),
-        ("Tip", "The less you fill, the less trace you leave."),
-    ]), title=f"[bold {RED}]Capacity[/]", border_style=RED, box=box.ROUNDED))
+        (t("cap.row_size"), t("cap.size_value", w=info["width"], h=info["height"])),
+        (t("cap.row_cap"), human_size(info["capacity_bytes"])),
+        (t("cap.row_cap_pw"), human_size(info["capacity_bytes_with_password"])),
+        (t("cap.row_tip"), t("cap.tip")),
+    ]), title=f"[bold {RED}]{t('cap.title')}[/]", border_style=RED, box=box.ROUNDED))
     _actions({})
 
 
@@ -424,7 +437,7 @@ CAPACITY = [_cap_image, _cap_show]
 # --------------------------------------------------------------------------
 def flow_demo(interactive: bool = True) -> None:
     steps: list[str] = []
-    with console.status(f"[{RED}]Starting demo...[/]", spinner="dots") as status:
+    with console.status(f"[{RED}]{t('demo.starting')}[/]", spinner="dots") as status:
         def on_step(s: str) -> None:
             steps.append(s)
             status.update(f"[{RED}]{s}...[/]")
@@ -433,49 +446,71 @@ def flow_demo(interactive: bool = True) -> None:
     for s in steps:
         console.print(f"[green]✓[/] {s}")
     ok = r.recovered == r.message
-    console.print(Panel(escape(r.recovered), title=f"[bold {RED}]Text extracted from the image[/]",
+    console.print(Panel(escape(r.recovered), title=f"[bold {RED}]{t('demo.recovered')}[/]",
                         border_style=RED, box=box.DOUBLE))
     console.print(Panel(_kv([
-        ("Check", "[green]hidden and extracted text are identical[/]" if ok else "[red]MISMATCH![/]"),
-        ("Protection", f"AES-256-GCM · password: [bold]{r.password}[/]" if r.password else "none"),
-        ("Image quality", f"PSNR {r.comparison.psnr:.1f} dB (above 40 dB is invisible to the eye)"),
-        ("Changed pixels", f"{r.comparison.changed_pixels_pct:.3f}% · largest colour change: {r.comparison.max_diff}/255"),
-        ("Files", escape(str(r.folder))),
-    ]), title=f"[bold {RED}]Demo result[/]", border_style=DARK_RED, box=box.ROUNDED))
-    console.print(f"[{GREY}]Opening the comparison card...[/]")
+        (t("demo.row_check"), t("demo.check_ok") if ok else t("demo.check_bad")),
+        (t("demo.row_protection"), t("demo.prot", pw=r.password) if r.password else t("demo.prot_none")),
+        (t("demo.row_quality"), t("demo.quality", psnr=f"{r.comparison.psnr:.1f}")),
+        (t("demo.row_changed"), t("demo.changed", pct=f"{r.comparison.changed_pixels_pct:.3f}", max=r.comparison.max_diff)),
+        (t("demo.row_files"), escape(str(r.folder))),
+    ]), title=f"[bold {RED}]{t('demo.title')}[/]", border_style=DARK_RED, box=box.ROUNDED))
+    console.print(f"[{GREY}]{t('demo.opening')}[/]")
     workflows.open_file(r.card)
     if not interactive:  # command-line use: never wait for input
         return
 
     _actions({
-        "i": ("inspect the hidden image",
+        "i": (t("demo.act_inspect"),
               lambda: run_wizard(INSPECT, {"preset": {"stego": r.stego, "original": r.cover}})),
-        "o": ("open folder", lambda: workflows.reveal(r.card)),
+        "o": (t("common.folder"), lambda: workflows.reveal(r.card)),
     })
+
+
+# --------------------------------------------------------------------------
+# Language
+# --------------------------------------------------------------------------
+def flow_language() -> None:
+    codes = list(i18n.SUPPORTED)
+    current = i18n.get_language()
+    options = "   ".join(f"[bold {RED}]{i}[/] {i18n.NAMES[code]}{' ✓' if code == current else ''}"
+                        for i, code in enumerate(codes, 1))
+    console.print(Panel(options, title=f"[bold {RED}]{t('lang.title')}[/]", border_style=DARK_RED, box=box.ROUNDED))
+    raw = Prompt.ask(f"[bold {RED}]{t('lang.prompt')}[/]", default="", show_default=False).strip().lower()
+    if raw in ("", "<"):
+        return
+    code = codes[int(raw) - 1] if raw.isdigit() and 1 <= int(raw) <= len(codes) else i18n.normalize(raw)
+    if code is None:
+        return
+    i18n.set_language(code, persist=True)
+    console.print(f"[green]✓[/] {t('lang.changed', name=i18n.NAMES[code])}")
 
 
 # --------------------------------------------------------------------------
 # Menu
 # --------------------------------------------------------------------------
-_MENU = [
-    ("1", "Quick demo", "One key: hide, extract and show the comparison card", flow_demo),
-    ("2", "Hide", "Hide a message or any file inside an image", lambda: run_wizard(HIDE, {})),
-    ("3", "Extract", "Read hidden data back out of an image", lambda: run_wizard(EXTRACT, {})),
-    ("4", "Inspect", "Detect hidden data, compare images, view the LSB plane", lambda: run_wizard(INSPECT, {})),
-    ("5", "Share card", "Original | hidden | difference map, ready to post", lambda: run_wizard(CARD, {})),
-    ("6", "Capacity", "How much data fits into an image?", lambda: run_wizard(CAPACITY, {})),
-    ("0", "Exit", "", None),
-]
+def _menu_items() -> list[tuple[str, str, str, Callable[[], None] | None]]:
+    """(key, name, description, handler); built on every call so a language change shows at once."""
+    return [
+        ("1", t("menu.1"), t("menu.1.d"), flow_demo),
+        ("2", t("menu.2"), t("menu.2.d"), lambda: run_wizard(HIDE, {})),
+        ("3", t("menu.3"), t("menu.3.d"), lambda: run_wizard(EXTRACT, {})),
+        ("4", t("menu.4"), t("menu.4.d"), lambda: run_wizard(INSPECT, {})),
+        ("5", t("menu.5"), t("menu.5.d"), lambda: run_wizard(CARD, {})),
+        ("6", t("menu.6"), t("menu.6.d"), lambda: run_wizard(CAPACITY, {})),
+        ("7", t("menu.7"), t("menu.7.d"), flow_language),
+        ("0", t("menu.0"), "", None),
+    ]
 
 
 def _menu() -> None:
-    t = Table.grid(padding=(0, 2))
-    t.add_column(style=f"bold {RED}", justify="right")
-    t.add_column(style="bold")
-    t.add_column(style=GREY)
-    for key, name, desc, _ in _MENU:
-        t.add_row(f"[{key}]", name, desc)
-    console.print(Panel(t, title=f"[bold {RED}]{APP_NAME}[/]", border_style=DARK_RED, box=box.ROUNDED))
+    tbl = Table.grid(padding=(0, 2))
+    tbl.add_column(style=f"bold {RED}", justify="right")
+    tbl.add_column(style="bold")
+    tbl.add_column(style=GREY)
+    for key, name, desc, _ in _menu_items():
+        tbl.add_row(f"[{key}]", name, desc)
+    console.print(Panel(tbl, title=f"[bold {RED}]{APP_NAME}[/]", border_style=DARK_RED, box=box.ROUNDED))
 
 
 def _guard(fn: Callable[[], None]) -> None:
@@ -485,36 +520,36 @@ def _guard(fn: Callable[[], None]) -> None:
     except StegoError as exc:
         _error(str(exc))
     except KeyboardInterrupt:
-        console.print("\n[grey70]Cancelled.[/]")
+        console.print(f"\n[grey70]{t('ui.cancelled')}[/]")
     except EOFError:
         return
     except Exception as exc:  # noqa: BLE001
-        _error(f"Unexpected error: {exc}")
+        _error(t("ui.unexpected", error=exc))
 
 
 def smart(path: Path) -> None:
     """Drag & drop entry: extract if the image holds PhantomPixel data, otherwise start hiding."""
     if engine.inspect(path):
-        console.print(f"[green]✓[/] {escape(path.name)} contains hidden data. Let's extract it.")
+        console.print(f"[green]✓[/] {t('smart.found', name=escape(path.name))}")
         run_wizard(EXTRACT, {"preset": {"stego": path}})
     else:
-        console.print(f"Let's hide something in [bold]{escape(path.name)}[/].")
+        console.print(t("smart.hide", name=f"[bold]{escape(path.name)}[/]"))
         run_wizard(HIDE, {"preset": {"cover": path}})
 
 
-def interactive(start: Path | None = None) -> None:
-    banner()
+def interactive(start: Path | None = None, animate: bool = True, no_anim: bool = False) -> None:
+    banner(animate=animate, no_anim=no_anim)
     if start is not None:
         _guard(lambda: smart(start))
-    handlers = {key: fn for key, _, _, fn in _MENU if fn}
     while True:
         _menu()
+        handlers = {key: fn for key, _, _, fn in _menu_items() if fn}
         try:
-            choice = Prompt.ask(f"[bold {RED}]phantom ›[/]", choices=[*handlers, "0", "q"], show_choices=False)
+            choice = Prompt.ask(f"[bold {RED}]{t('ui.prompt')}[/]", choices=[*handlers, "0", "q"], show_choices=False)
         except (KeyboardInterrupt, EOFError):
             return
         if choice in ("0", "q"):
-            console.print(f"[{GREY}]Bye.[/]")
+            console.print(f"[{GREY}]{t('ui.bye')}[/]")
             return
         console.print()
         _guard(handlers[choice])

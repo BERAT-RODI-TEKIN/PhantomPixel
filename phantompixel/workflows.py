@@ -18,6 +18,7 @@ from pathlib import Path
 from . import analyzer, engine, visuals
 from .engine import HideResult, Payload
 from .errors import StegoError
+from .i18n import t
 from .utils import unique_path
 
 
@@ -35,20 +36,23 @@ class Inspection:
     comparison: analyzer.Comparison | None
 
 
-def hide(cover: str | Path, text: str | None = None, file: str | Path | None = None,
-         password: str | None = None, output: str | Path | None = None,
-         verify: bool = True) -> HideResult:
+def make_payload(text: str | None = None, file: str | Path | None = None) -> Payload:
+    """Builds the secret from a message or a file (exactly one of them)."""
     if (text is None) == (file is None):
-        raise StegoError("Provide either a text message or a file to hide (exactly one).")
-    cover = Path(cover)
+        raise StegoError(t("err.need_one"))
     if file is not None:
         p = Path(file)
         if not p.is_file():
-            raise StegoError(f"File not found: {p}")
-        payload = Payload("file", p.name, p.read_bytes())
-    else:
-        payload = Payload("text", "", text.encode("utf-8"))  # text needs no file name
+            raise StegoError(t("err.file_not_found", path=p))
+        return Payload("file", p.name, p.read_bytes())
+    return Payload("text", "", text.encode("utf-8"))  # text needs no file name
 
+
+def hide(cover: str | Path, text: str | None = None, file: str | Path | None = None,
+         password: str | None = None, output: str | Path | None = None,
+         verify: bool = True) -> HideResult:
+    payload = make_payload(text, file)
+    cover = Path(cover)
     out = Path(output).with_suffix(".png") if output else unique_path(cover.with_name(f"{cover.stem}_phantom.png"))
     return engine.hide(cover, payload, out, password, verify)
 
@@ -82,6 +86,14 @@ def inspect(stego: str | Path, original: str | Path | None = None) -> Inspection
         detection=analyzer.detect(stego),
         comparison=analyzer.compare(original, stego) if original else None,
     )
+
+
+def capacity_info(path: str | Path) -> dict:
+    """Size and capacity of an image (bytes of incompressible data)."""
+    w, h = engine.image_size(path)
+    return {"width": w, "height": h,
+            "capacity_bytes": engine.capacity_for(w, h),
+            "capacity_bytes_with_password": engine.capacity_for(w, h, True)}
 
 
 def make_card(original: str | Path, stego: str | Path, output: str | Path | None = None) -> Path:
@@ -124,3 +136,36 @@ def reveal(path: str | Path) -> None:
             open_file(path.parent)
     except Exception:  # noqa: BLE001
         open_file(path.parent)
+
+
+# --------------------------------------------------------------------------
+# Plain-data views of the results (used by `--json`; keys are stable and language independent)
+# --------------------------------------------------------------------------
+def hide_to_dict(res: HideResult) -> dict:
+    return {"output": str(res.output), "stored_bytes": res.stored_bytes, "original_bytes": res.original_bytes,
+            "compressed": res.compressed, "encrypted": res.encrypted, "verified": res.verified,
+            "capacity_bytes": res.capacity_bytes, "usage": round(res.usage, 6)}
+
+
+def extract_to_dict(res: Extracted) -> dict:
+    out: dict = {"kind": res.payload.kind, "size": len(res.payload.data)}
+    if res.text is not None:
+        out["text"] = res.text
+    else:
+        out["name"] = res.payload.name
+        out["saved"] = str(res.saved)
+    return out
+
+
+def inspection_to_dict(r: Inspection) -> dict:
+    out: dict = {
+        "signature": r.signature,
+        "detection": {"chi2": r.detection.chi2, "suspicion": r.detection.suspicion, "level": r.detection.level},
+        "comparison": None,
+    }
+    if r.comparison:
+        c = r.comparison
+        out["comparison"] = {"psnr": None if c.psnr == float("inf") else c.psnr,
+                             "changed_pixels_pct": c.changed_pixels_pct,
+                             "changed_values_pct": c.changed_values_pct, "max_diff": c.max_diff}
+    return out

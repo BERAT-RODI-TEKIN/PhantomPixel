@@ -33,8 +33,13 @@ echo [4/4] Building the EXE, this can take 1-2 minutes...
 if errorlevel 1 goto :failed
 
 echo.
+echo SHA-256 checksum:
+certutil -hashfile dist\PhantomPixel.exe SHA256 ^| findstr /v ":"
+certutil -hashfile dist\PhantomPixel.exe SHA256 > dist\PhantomPixel.exe.sha256
+echo.
 echo  ============================================================
 echo   DONE:  dist\PhantomPixel.exe
+echo   The SHA-256 checksum is saved next to it (PhantomPixel.exe.sha256).
 echo   Copy this single file to a USB stick. It runs on any Windows
 echo   PC without Python. Drag an image onto it for smart mode.
 echo  ============================================================

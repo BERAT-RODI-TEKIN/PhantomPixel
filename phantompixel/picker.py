@@ -8,8 +8,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-IMAGE_TYPES = [("Images", "*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff"), ("All files", "*.*")]
-ANY_TYPES = [("All files", "*.*")]
+from .i18n import t
+
+_IMAGE_PATTERN = "*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff"
 
 _last_dir: str | None = None
 
@@ -18,7 +19,7 @@ class PickerUnavailable(Exception):
     """No file dialog can be shown in this environment."""
 
 
-def pick(kind: str = "image", title: str = "Choose a file") -> Path | None:
+def pick(kind: str = "image", title: str | None = None) -> Path | None:
     global _last_dir
     try:
         import tkinter as tk
@@ -38,7 +39,9 @@ def pick(kind: str = "image", title: str = "Choose a file") -> Path | None:
         root.withdraw()
         root.attributes("-topmost", True)
         root.update()
-        options = {"parent": root, "title": title, "filetypes": IMAGE_TYPES if kind == "image" else ANY_TYPES}
+        everything = (t("picker.all"), "*.*")
+        types = [(t("picker.images"), _IMAGE_PATTERN), everything] if kind == "image" else [everything]
+        options = {"parent": root, "title": title or t("picker.title"), "filetypes": types}
         if _last_dir:
             options["initialdir"] = _last_dir
         name = filedialog.askopenfilename(**options)
